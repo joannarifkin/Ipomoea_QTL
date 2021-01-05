@@ -1,1 +1,2 @@
-
+#APL Scripts
+APL Scripts.pdf - all APL scripts used in analysis: estimating within- and between-module pairwise trait correlations, calculating pairwise trait overlap within and between modules, QTL position randomization test, calculation of correlation between phenotypic correlation and QTL overlap, predicting genetic correlations from QTL properties. Note that commends on code are in light gray.

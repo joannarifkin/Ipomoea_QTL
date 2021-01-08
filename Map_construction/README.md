@@ -1,1 +1,2 @@
-#Files for map construction in Lep-Map 3 and Lep-Anchor. Also includes scripts for converting Lep-Map genotype output for use in R/QTL.
+#Files for map construction in Lep-Map 3 and Lep-Anchor. Also includes scripts for converting Lep-Map genotype output for use in R/QTL2.
+Full_map_construction_script_May_selfing_final_clean.txt - commands to call genotype probabilities, split linkage groups, order markers, identify highest likelihood marker order, trim bad markers, associate linkage map with draft assembly, export genotypes, process genotypes for use in R/QTL2, and export a fasta file of the pseudomolecule assembly. 

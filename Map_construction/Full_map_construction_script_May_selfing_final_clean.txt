@@ -1,0 +1,481 @@
+#1. Use the Lep-Map3 snp-calling pipeline to assign posterior probabilities to all possible genotypes
+
+	nohup samtools mpileup -q 10 -Q 10 -s $(cat sorted_bams)|awk -f /ohta/joanna.rifkin/Lep-Map/scripts/pileupParser2.awk|awk -f /ohta/joanna.rifkin/Lep-Map/scripts/pileup2posterior.awk|gzip > Ipomoea_F2_4-8-20_post.gz 2>Lep-MapCall.out 3>Lep-MapCall.err &
+	
+	#The files "sorted_bams" and "mapping.txt" (attached) are required for this step. See the Lep-Map3 documentation for a description.
+
+		#1a. Parallelized SNP-calling pipeline
+
+			grep ">" /ohta/joanna.rifkin/Genomes/Ipomoea/Lacunosa/BioNano/EXP_REFINEFINAL1_bppAdjust_cmap_lacunosa_genome_070416_bionano_fasta_NGScontigs_HYBRID_SCAFFOLD.fasta|cut -c 2- >contigs.txt
+
+			#Index all BAM files
+
+
+			for i in $(cat contigs.txt)
+			do 
+			echo "samtools mpileup -r \"$i\" -q 10 -Q 10 -s \$(cat sorted_bams)|awk -f pileupParser2.awk|awk -f pileup2posterior.awk|gzip >\"$i\".post.gz"
+			done >SNP_calling.txt
+
+			nohup parallel --jobs 16 < SNP_calling.txt > SNP_calling.out 2>SNP_calling.err &
+			#It might be necessary to change the ulimit with large numbers of files
+
+			zcat *.post.gz | awk '(NR==1 || ($1!="CHR"))'|gzip >all_post.gz #Combine contig post.gz files into one genotype file
+
+		#1b. Modify the post.gz file to include CL_5 twice as both male and female parents
+
+			zcat all_post.gz | awk -F'\t' '{print $0"\t"$1230}' - | sed 's/CL5/CL5_m/' - | sed 's/CL5/CL5_f/2' - | gzip > modified_all_post.gz
+
+
+#2. Use the ParentCall2 module in Lep-Map3 to estimate parental genotypes and for haplotype reconstruction. 
+#The file generated in the previous step and the pedigree file (attached) are require for this step.
+
+		nohup zcat modified_all_post.gz|java -cp /ohta/joanna.rifkin/Lep-Map/bin ParentCall2 data=combined_pedigree.txt posteriorFile=- removeNonInformative=1 |gzip > modified_all_post.call.gz &
+		Number of called markers = 10159 (10159 informative)
+		Number of called Z/X markers = 0
+
+
+#3. Use the SeparateChromosomes2 module in Lep-Map3 to separate chromosomes iteratively, first breaking down to approximately the right number of chromosomes and then splitting the clumped chromosome 1 with higher LOD scores until it breaks apart. Finding the initial LOD is done via trial and error. 
+
+	##### Select 53 as LOD to separate markers 
+
+	 zcat modified_all_post.call.gz | java -cp /ohta/joanna.rifkin/Lep-Map/bin SeparateChromosomes2 data=- families=F2 lodLimit=53 distortionLod=1 >map53.nofilt.txt &
+	Number of LGs = 40, markers in LGs = 6722, singles = 3437
+	sort map53.nofilt.txt|uniq -c|sort -n #This command displays the distribution of chromosome sizes
+
+		  10 14
+		 24 13
+		 50 12
+		230 11
+		350 10
+		356 9
+		386 8
+		392 7
+		409 6
+		471 5
+		477 4
+		498 3
+		533 2
+	   2450 1
+	   3437 0
+
+	##### Re-split LG1 so that it breaks apart. We now have 15 major LGs, consistent with the karyotype.
+	zcat modified_all_post.call.gz | java -cp /ohta/joanna.rifkin/Lep-Map/bin SeparateChromosomes2 data=- lodLimit=95 sizeLimit=10 distortionLod=1 map=map53.nofilt.txt lg=1 > splitLG1map53.nofilt.txt
+	sort splitLG1map53.nofilt.txt|uniq -c|sort -n
+	Number of LGs = 19, markers in LGs = 6530, singles = 3629
+
+		  1 #java SeparateChromosomes2  data=- lodLimit=95 sizeLimit=10 distortionLod=1 map=map53.nofilt.txt lg=1
+		 10 19
+		 24 18
+		 50 17
+		 59 16
+		120 15
+		230 14
+		350 13
+		356 12
+		386 11
+		392 10
+		398 9
+		409 8
+		471 7
+		475 6
+		477 5
+		498 4
+		530 3
+		533 2
+		762 1
+	   3629 0
+
+   
+#4. Use the OrderMarkers2 module in Lep-Map3 to order the markers based on the F2s. Each run of OrderMarkers2 chooses the best likelihood order out of 6 runs, and I run the entire loop 10 times, so 60 orders are assessed for every chromosome. 
+
+
+	zcat ../../modified_all_post.call.gz | java -cp /ohta/joanna.rifkin/Lep-Map/bin OrderMarkers2 numThreads=10 map=../../splitLG1map53.nofilt.txt data=- chromosome=1 families="F2"  selfingPhase=1 
+
+	for i in {1..10}
+
+	do
+
+	for j in {1..19}
+
+	do
+	zcat ../../modified_all_post.call.gz | java -cp /ohta/joanna.rifkin/Lep-Map/bin OrderMarkers2 numThreads=10 map=../../splitLG1map53.nofilt.txt data=- chromosome=$j selfingPhase=1 families=F2 calculateIntervals=/ohta/joanna.rifkin/Lep-Map/Ipomoea/Final_Map_F2_F3_F5/Order_markers/F2_order_4-22/4-22_intervals$j.$i.txt >/ohta/joanna.rifkin/Lep-Map/Ipomoea/Final_Map_F2_F3_F5/Order_markers/F2_order_4-22/4-22-order$j.$i.txt 2>/ohta/joanna.rifkin/Lep-Map/Ipomoea/Final_Map_F2_F3_F5/Order_markers/F2_order_4-22/4-22-order$j.$i.err 
+
+	awk -vFS="\t" -vOFS="\t" '(NR==FNR){s[NR-1]=$0}(NR!=FNR){if ($1 in s) $1=s[$1];print}' ../../snps.txt /ohta/joanna.rifkin/Lep-Map/Ipomoea/Final_Map_F2_F3_F5/Order_markers/F2_order_4-22/4-22-order$j.$i.txt >/ohta/joanna.rifkin/Lep-Map/Ipomoea/Final_Map_F2_F3_F5/Order_markers/F2_order_4-22/4-22-order$j.$i.mapped
+
+	done
+	done
+	nohup ./Order_markers_loop_F2_only.sh > Order_markers_loop_F2_only.out 2> Order_markers_loop_F2_only.err &
+	[1] 17275
+
+
+######################
+
+
+#5. Collect the chromosome orders with the highest likelihoods into a separate folder.
+
+
+	grep "likelihood" *.txt > likelihoods.txt 
+	#I then just pick the best ones in Excel by sorting by chromosome then by likelihood, repeating the sequence 1:5 in a new column, and sorting by that column. Then make a series of commands on the format "mv 4-22-order$j.$i.* highest_likelihood." BE CAREFUL not to accidentally move, e.g., 3.2 and 13.2 with the same mv command.
+
+
+	grep "recombines" *.err > all_individual_recombinations.txt #This collects files with stats on how often individuals recombine.
+
+
+########## Lep-Anchor #####################
+
+
+#1. Prepare input for CleanMap by attaching SNP positions to chromosome assignments
+
+	paste /ohta/joanna.rifkin/Lep-Map/Ipomoea/Final_Map_F2_F3_F5/snps.txt /ohta/joanna.rifkin/Lep-Map/Ipomoea/Final_Map_F2_F3_F5/splitLG1map53.nofilt.txt >cleanMap_4-20-2020.input &
+
+
+#2. Run CleanMap
+
+
+	java -cp /ohta/joanna.rifkin/Lep-Map/Lep-Anchor/bin/ CleanMap map=cleanMap_4-20-2020.input > 4-20-2020-map.clean
+	Number of scaffolds = 49
+	Number of chromosomes = 19
+	Number of padding markers = 398309
+	logL = -1406.7895701714285
+	0.01    0.01
+	logL = -869.3341805726569
+	0.0015799921104082853   0.004935076706758487
+	logL = -431.48570201857876
+	0.001281606827252389    0.001588086414536624
+	logL = -251.45501225317054
+	0.0022975090314372956   3.1886484824771694E-4
+	logL = -222.15463634129944
+	0.004357348746554508    8.064908968273401E-5
+	logL = -219.6703485112122
+	0.005433345515913582    4.616539398948116E-5
+	logL = -219.09719443232862
+	0.006196727665233242    3.485695813716536E-5
+	logL = -218.9099677253714
+	0.00663312444125188     2.9053891638910984E-5
+	logL = -218.85068260927582
+	0.006869991910185762    2.5961428278207922E-5
+	logL = -218.83308438327722
+	0.006995843755246409    2.433197666136106E-5
+	logL = -218.82811076855464
+	0.0070617565912245535   2.3482773824176066E-5
+	logL = -218.82674635807584
+	0.0070959639924300716   2.304329295028271E-5
+	logL = -218.82637762889627
+	0.007113623280333178    2.2816762155165293E-5
+	logL = -218.8262783999613
+	0.007122713339717941    2.2700250905876885E-5
+	logL = -218.82625155539904
+	0.00712738521070036     2.264039489478536E-5
+	logL = -218.82624417137023
+	0.007129784403362526    2.2609663187129816E-5
+	logL = -218.8262420721615
+	0.0071310159707835795   2.2593889595118786E-5
+	logL = -218.8262414408204
+	0.007131648030072543    2.2585794816951673E-5
+	logL = -218.82624123438126
+	0.00713197237670024     2.2581641036631857E-5
+	logL = -218.8262411594227
+	0.007132138808478573    2.2579509642672934E-5
+	logL = -218.82624112909556
+	0.007132224207017378    2.257841600239734E-5
+
+	sort -V 4-20-2020-map.clean > map_sorted.clean
+
+
+#3. Make a bed file
+	java -cp /ohta/joanna.rifkin/Lep-Map/Lep-Anchor/bin/ Map2Bed map=map_sorted.clean contigLength=reference.fasta.sizes > map.bed
+
+
+
+#4. Generate input for PlaceAndOrientContigs 
+
+	#Working loop that makes input files from all interval files
+
+	for X in {1..19}
+	do
+	echo $X
+	awk -vn=$X '(NR==FNR){map[NR-1]=$0}(NR!=FNR){$1=map[$1] "\t" n;print}' snps.txt /ohta/joanna.rifkin/Lep-Map/Ipomoea/Final_Map_F2_F3_F5/Order_markers/F2_order_4-22/highest_likelihood/4-22_intervals$X.*.txt > /ohta/joanna.rifkin/Lep-Map/Ipomoea/Final_Map_F2_F3_F5/Order_markers/Lep-Anchor4-22/order$X.input
+	done
+
+
+
+
+#5 Run PlaceAndOrientContigs
+		
+	for X in {1..19}
+	do
+	echo $X
+	java -cp /ohta/joanna.rifkin/Lep-Map/Lep-Anchor/bin/ PlaceAndOrientContigs bed=map.bed chromosome=$X map=Order_markers/Lep-Anchor4-22/order$X.input >Order_markers/Lep-Anchor4-22/chr$X.la 2>Order_markers/Lep-Anchor4-22/chr$X.la.err & #Currently working
+	done
+
+
+#6 Make .agp files
+
+	awk -vlg=1 -f /ohta/joanna.rifkin/Lep-Map/Lep-Anchor/makeagp_full2.awk chr1.la >chr1.agp
+
+	for X in {1..19}
+	do
+	echo $X
+	awk -vlg=$X -f /ohta/joanna.rifkin/Lep-Map/Lep-Anchor/makeagp_full2.awk chr$X.la >chr$X.agp #Currently working
+	done
+
+
+#7 Convert markers to physical order 
+
+
+	for X in {1..19}
+	do
+	echo $X
+	awk -f /ohta/joanna.rifkin/Lep-Map/Lep-Anchor/liftover.awk chr$X.agp order$X.input|sort -V|grep CHR >order$X.liftover
+	done
+
+		1
+		Warning: scaffold Super-Scaffold_100019 not in agp file2
+		Warning: scaffold Super-Scaffold_100010 not in agp file2
+		Warning: scaffold Super-Scaffold_100002 not in agp file2
+		Warning: scaffold Super-Scaffold_100030 not in agp file2
+		Warning: scaffold Super-Scaffold_100003 not in agp file2
+		Warning: scaffold Super-Scaffold_100021 not in agp file2
+		Warning: scaffold Super-Scaffold_100012 not in agp file2
+		Warning: scaffold Super-Scaffold_100005 not in agp file2
+		Warning: scaffold Super-Scaffold_100023 not in agp file2
+		Warning: scaffold Super-Scaffold_100042 not in agp file2
+		Warning: scaffold Super-Scaffold_100007 not in agp file2
+		Warning: scaffold Super-Scaffold_100017 not in agp file2
+		Warning: scaffold Super-Scaffold_100026 not in agp file2
+		Warning: scaffold Super-Scaffold_100009 not in agp file2
+		2
+		3
+		4
+		Warning: scaffold Super-Scaffold_635 not in agp file2
+		5
+		Warning: scaffold Super-Scaffold_100014 not in agp file2
+		6
+		Warning: scaffold Super-Scaffold_100028 not in agp file2
+		Warning: scaffold Super-Scaffold_100005 not in agp file2
+		Warning: scaffold Super-Scaffold_100025 not in agp file2
+		7
+		Warning: scaffold Super-Scaffold_100030 not in agp file2
+		8
+		9
+		10
+		11
+		12
+		Warning: scaffold Super-Scaffold_100019 not in agp file2
+		Warning: scaffold Super-Scaffold_100001 not in agp file2
+		13
+		Warning: scaffold Super-Scaffold_100002 not in agp file2
+		14
+		15
+		16
+		17
+		18
+		19
+
+
+
+	for X in {1..19}
+	do
+	echo $X
+	awk -vinverse=$X -f /ohta/joanna.rifkin/Lep-Map/Lep-Anchor/liftover.awk chr$X.agp order$X.liftover|awk '(NR==FNR){m[$1"\t"($2+0)]=NR-1}(NR!=FNR){print m[$1"\t"($2+0)]}' ../../snps.txt - >order$X.phys
+	done
+
+# Remake physical orders with input trimmed to remove bad markers. Bad markers can be identified from plots of the raw, pre-LepAnchor orders, as markers that are isolated at the ends of the LG. Once related to the physical position, they cause map expansion. They can be removed using the grep command below, by commenting them out of the order files, or by giving them as a list with the removeMarkers command.
+# Copy all order.input files to a new directory and trim by removing bad markers 
+
+	grep -vf bad_markers_1 order1.input > trimmed_order1.input
+
+	## OR ###
+	
+	#Remove bad markers from LG 3 in the F3
+		zcat /ohta/joanna.rifkin/Lep-Map/Ipomoea/Final_Map_F2_F3_F5/modified_all_post.call.gz | java -cp /ohta/joanna.rifkin/Lep-Map/bin OrderMarkers2 numThreads=30 families=F3 evaluateOrder=/ohta/joanna.rifkin/Lep-Map/Ipomoea/Final_Map_F2_F3_F5/Order_markers/Lep-Anchor4-22/trimmed_order_input_files/order3.phys improveOrder=0 removeMarkers=1787 1786 1785 1784 1783 1782 1781 1780  data=- > F3_chr3phs_replacement.txt 2> F3_chr3phs_replacement.err
+
+
+
+# Run OrderMarkers using Evaluate Order setting with physical order
+######## 4-20-2020
+#Run as a .sh script or interactively
+
+	#F2
+	#Evaluate and force physical order
+
+		/ohta/joanna.rifkin/Lep-Map/Ipomoea/Final_Map_F2_F3_F5/Final_order/Evaluate_force_physical
+		for X in {1..19}
+		do
+		echo $X
+		zcat /ohta/joanna.rifkin/Lep-Map/Ipomoea/Final_Map_F2_F3_F5/modified_all_post.call.gz | java -cp /ohta/joanna.rifkin/Lep-Map/bin OrderMarkers2 numThreads=30 families=F2 evaluateOrder=/ohta/joanna.rifkin/Lep-Map/Ipomoea/Final_Map_F2_F3_F5/Order_markers/Lep-Anchor4-22/order$X.phys improveOrder=0 data=- > chr$X\phs.txt 2> chr$X\phs.err 
+		awk -vFS="\t" -vOFS="\t" '(NR==FNR){s[NR-1]=$0}(NR!=FNR){if ($1 in s) $1=s[$1];print}' ../../snps.txt chr$X\phs.txt > chr$X\phs.mapped
+		done &
+
+		for X in {1..19}
+		do
+		awk -vFS="\t" -vOFS="\t" '(NR==FNR){s[NR-1]=$0}(NR!=FNR){if ($1 in s) $1=s[$1];print}' ../../snps.txt chr$X\phs.txt > chr$X\phs.mapped
+		done &
+
+		for i in {1..17} 
+		do 
+		echo $i 
+		cat chr$i\phs.mapped | cut -f 1-4 > $i\_positions.txt  
+		done
+####################
+
+	#F3
+
+		/ohta/joanna.rifkin/Lep-Map/Ipomoea/Final_Map_F2_F3_F5/Order_markers/Lep-Anchor/F3/Force_physical_F2_trimmed
+
+		for X in {1..17}
+		do
+		echo $X
+		zcat /ohta/joanna.rifkin/Lep-Map/Ipomoea/Final_Map_F2_F3_F5/modified_all_post.call.gz | java -cp /ohta/joanna.rifkin/Lep-Map/bin OrderMarkers2 numThreads=30 families=F3 evaluateOrder=/ohta/joanna.rifkin/Lep-Map/Ipomoea/Final_Map_F2_F3_F5/Order_markers/Lep-Anchor4-22/trimmed_order_input_files/order$X.phys improveOrder=0 data=- > F3_chr$X\phs.txt 2> F3_chr$X\phs.err
+		awk -vFS="\t" -vOFS="\t" '(NR==FNR){s[NR-1]=$0}(NR!=FNR){if ($1 in s) $1=s[$1];print}' ../../../../snps.txt F3_chr$X\phs.txt >F3_chr$X\phs.mapped
+		done
+
+		for i in {1..17} 
+		do 
+		echo $i 
+		cat F3_chr$i\phs.mapped | cut -f 1-4 > F3_$i\_positions.txt  
+		done
+
+
+	#F5
+
+		/ohta/joanna.rifkin/Lep-Map/Ipomoea/Final_Map_F2_F3_F5/Order_markers/Lep-Anchor/F5/Force_physical_trimmed_F2
+
+		for X in {1..17}
+		do
+		echo $X
+		zcat /ohta/joanna.rifkin/Lep-Map/Ipomoea/Final_Map_F2_F3_F5/modified_all_post.call.gz | java -cp /ohta/joanna.rifkin/Lep-Map/bin OrderMarkers2 numThreads=30 families=F5 evaluateOrder=/ohta/joanna.rifkin/Lep-Map/Ipomoea/Final_Map_F2_F3_F5/Order_markers/Lep-Anchor4-22/trimmed_order_input_files/order$X.phys improveOrder=0 data=- > F5_chr$X\phs.txt 2> F5_chr$X\phs.err
+		awk -vFS="\t" -vOFS="\t" '(NR==FNR){s[NR-1]=$0}(NR!=FNR){if ($1 in s) $1=s[$1];print}' ../../../../snps.txt F5_chr$X\phs.txt > F5_chr$X\phs.mapped
+		done
+
+
+		for i in {1..17} 
+		do 
+		echo $i 
+		cat F5_chr$i\phs.mapped | cut -f 1-4 > F5_$i\_positions.txt  
+		done
+
+
+###################################################
+#5. Use map2genotypes.awk to export the map
+
+
+#converts phased data to "genotypes"
+#usage:
+#java ... OrderMarkers2 ... outputPhasedData=1 > order_with_phase_LM3.txt
+#awk [-vchr=X] [-vfullData=1] -f map2genotypes.awk order_with_phase_LM3.txt
+#output columns marker name, chr, male postion, female postion, genotypes coded as "1 1", "1 2", "2 2" and 0 as missing
+#providing fullData ouputs parents and pedigree...
+
+/ohta/joanna.rifkin/Lep-Map/Ipomoea/Final_Map_F2_F3_F5/Final_order/Evaluate_force_physical
+	for i in {1..17} 
+	do 
+	echo $i 
+	awk -f /ohta/joanna.rifkin/Lep-Map/scripts/map2genotypes.awk chr$i\phs.mapped | cut -f 1-4 > tmp_$i\_positions.txt  
+	awk -f /ohta/joanna.rifkin/Lep-Map/scripts/map2genotypes.awk chr$i\phs.txt  > tmp_$i\_genotypes.txt  
+	paste tmp_$i\_positions.txt tmp_$i\_genotypes.txt | column -s $'\t' -t >  $i\_export_map.txt 
+	sed -i -e "s/^/LG_$i\t/" $i\_export_map.txt 
+	rm tmp*
+	done
+
+cat *_export_map.txt > all_export_map.txt
+
+#F3 map
+#/ohta/joanna.rifkin/Lep-Map/Ipomoea/Final_Map_F2_F3_F5/Order_markers/Lep-Anchor/F3/Force_physical_F2_trimmed
+	for i in {1..17} 
+	do 
+	echo $i 
+	awk -f /ohta/joanna.rifkin/Lep-Map/scripts/map2genotypes.awk F3_chr$i\phs.mapped | cut -f 1-4 > tmp_$i\_positions.txt  
+	awk -f /ohta/joanna.rifkin/Lep-Map/scripts/map2genotypes.awk F3_chr$i\phs.txt  > tmp_$i\_genotypes.txt  
+	paste tmp_$i\_positions.txt tmp_$i\_genotypes.txt | column -s $'\t' -t >  F3_$i\_export_map.txt 
+	sed -i -e "s/^/LG_$i\t/" F3_$i\_export_map.txt 
+	rm tmp*
+	done
+
+
+cat *_export_map.txt > all_export_map.txt
+
+
+#F5 map
+#/ohta/joanna.rifkin/Lep-Map/Ipomoea/Final_Map_F2_F3_F5/Order_markers/Lep-Anchor/F3/Force_physical_F2_trimmed
+	for i in {1..17} 
+	do 
+	echo $i 
+	awk -f /ohta/joanna.rifkin/Lep-Map/scripts/map2genotypes.awk F5_chr$i\phs.mapped | cut -f 1-4 > tmp_$i\_positions.txt  
+	awk -f /ohta/joanna.rifkin/Lep-Map/scripts/map2genotypes.awk F5_chr$i\phs.txt  > tmp_$i\_genotypes.txt  
+	paste tmp_$i\_positions.txt tmp_$i\_genotypes.txt | column -s $'\t' -t >  F5_$i\_export_map.txt 
+	sed -i -e "s/^/LG_$i\t/" F5_$i\_export_map.txt 
+	rm tmp*
+	done
+
+	cat *_export_map.txt > all_export_map.txt
+
+#########################################
+#Script to process exported map from Lep-Map3 for use in R/QTL
+
+	cp all_export_map.txt all_export_map_tabs.txt
+	sed  -i -e 's/\s\s/\t/g' all_export_map_tabs.txt
+	sed  -i -e 's/\t\t/\t/g' all_export_map_tabs.txt #Repeat several times
+	sed  -i -e 's/\t\t/\t/g' all_export_map_tabs.txt #Repeat several times
+	sed  -i -e 's/\t\t/\t/g' all_export_map_tabs.txt #Repeat several times
+	sed  -i -e 's/\t\t/\t/g' all_export_map_tabs.txt #Repeat several times
+	sed  -i -e 's/\t\t/\t/g' all_export_map_tabs.txt #Repeat several times
+	 
+	cut -f 1-9 all_export_map_tabs.txt > all_export_map_positions.txt
+	sed  -i -e 's/ //g'  all_export_map_positions.txt
+	sed  -i -e 's/\t\t/\t/g'  all_export_map_positions.txt
+	sed  -i -e 's/\t\t/\t/g'  all_export_map_positions.txt
+	sed  -i -e 's/\t\t/\t/g'  all_export_map_positions.txt
+	sed  -i -e 's/\t\t/\t/g'  all_export_map_positions.txt
+
+	### all_export_map_positions.txt can easily be rearranged into the input linkage map for R/QTL in R, Excel, or a text editor
+
+	#Generate geno.csv file (transposed)
+	sed  -i -e 's/\s\s/\t/g' all_export_map_tabs.txt #repeat until file size stops changing
+	sed  -i -e 's/\t\t/\t/g' all_export_map_tabs.txt #double check there are no double tabs
+	sed  -i -e 's/ //g' all_export_map_tabs.txt #Combine GTs removing space
+
+	sed   "s/\t/,/g" all_export_map_tabs.txt > all_export_map_commas.txt #convert tabs to commas
+
+
+	cut -d ',' -f 10- all_export_map_commas.txt > all_export_map_commas_GT_only.txt
+	sed -i 's/0/-/g' all_export_map_commas_GT_only.txt #Removes missing if applicable
+
+
+	#Create marker name file
+	#all_export_map_positions.txt
+
+	awk '{print $2"_"$4}'  all_export_map_positions.txt > marker_names.txt 
+
+	paste -d ',' marker_names.txt all_export_map_commas_GT_only.txt > GT_no_individuals.txt 
+
+
+	#Create headers
+
+	zcat /ohta/joanna.rifkin/Lep-Map/Ipomoea/Final_Map_F2_F3_F5/modified_all_post.call.gz | head -3 | tail -1 > header.txt
+	sed  -i -e 's/\s/,/g' header.txt
+	cut -d ',' -f-1,7-402,407-619,624- header.txt > header_no_parents.txt
+
+	cat header_no_parents.txt GT_no_individuals.txt > all_geno.csv #individual names in order pulled from 
+
+	#cut -d ',' -f 1-397 all_geno.csv > ipomoea_geno_F2_only.csv
+
+	#cut -d ',' -f 1,398-610 all_geno.csv > ipomoea_geno_F3_only.csv
+
+	#cut -d ',' -f 1,611-1226 all_geno.csv > ipomoea_geno_F5_only.csv
+
+
+
+
+
+############################# Create fasta from Lep-Anchor
+cd /ohta/joanna.rifkin/Lep-Map/Ipomoea/Final_Map_F2_F3_F5/Order_markers/Lep-Anchor4-22
+cp *.agp /ohta/joanna.rifkin/Genomes/Ipomoea/Lacunosa/BioNano/Lep-Anchor_final_genome/
+cd /ohta/joanna.rifkin/Genomes/Ipomoea/Lacunosa/BioNano/Lep-Anchor_final_genome
+c
+
+awk -f /ohta/joanna.rifkin/Lep-Map/Lep-Anchor/makefasta /ohta/joanna.rifkin/Genomes/Ipomoea/Lacunosa/BioNano/EXP_REFINEFINAL1_bppAdjust_cmap_lacunosa_genome_070416_bionano_fasta_NGScontigs_HYBRID_SCAFFOLD.fasta chr*.agp > Ipomoea_Lep-Anchor_final.fasta &
+
+awk 'BEGIN {n_seq=0;} /^>/ {if(n_seq%1000==0){file=sprintf("myseq%d.fa",n_seq);} print >> file; n_seq++; next;} { print >> file; }' < Ipomoea_Lep-Anchor_final.fasta
+
+awk '/^>CHR/ {OUT=substr($0,2) ".fa"}; OUT {print >OUT}' Ipomoea_Lep-Anchor_final.fasta

@@ -1,0 +1,34 @@
+crosstype: f2
+geno: ipomoea_geno_F2_only.csv
+geno_transposed: true
+#pheno: ipomoea_pheno.csv
+#pheno: Means_all_F2_individuals_and_shape_3-17.csv
+#pheno: Means_all_F2_individuals_and_shape_5-23-19.csv
+#pheno: F2_means_for_QTL_analysis.csv
+pheno: F2_means_for_QTL_analysis_2020-05-25.csv
+#phenocovar: iron_phenocovar.csv
+#covar: iron_covar.csv
+gmap: ipomoea_gmap.csv
+#pmap: iron_pmap.csv
+alleles:
+- "1"
+- "2"
+genotypes:
+  11: 1
+  12: 2
+  21: 2
+  22: 3
+#sex:
+#  covar: sex
+#  f: female
+#  m: male
+#cross_info:
+#  covar: cross_direction
+#  (SxB)x(SxB): 0
+#  (BxS)x(BxS): 1
+#x_chr: X
+na.strings:
+- '-'
+- '--'
+- 'NA'
+#- '0'
